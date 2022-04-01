@@ -1,7 +1,7 @@
 # Go-Firefox
 
 <div>
-<img align="left" src="https://raw.githubusercontent.com/unikiosk/go-firefix/master/docs/img/go-firefox.png" alt="Go-Firefox" width="128px" height="128px" />
+<img align="left" src="https://github.com/unikiosk/go-firefox/raw/main/go-firefox.png" alt="Go-Firefox" width="128px" height="128px" />
 <br/>
 <p>
 	Firefox manager as a code. Enables to run Firefox and manage firefox from code.
