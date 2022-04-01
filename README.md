@@ -59,8 +59,11 @@ Under the hood go-firefox uses [Chrome DevTools Protocol](https://chromedevtools
 ## Configuration
 
 `GOFIREFOX_BIN` - override firefox location
+
 `GOFIREFOX_PROFILE_DIR` - override firefox profile location
+
 `GOFIREFOX_DEVTOOLS_PORT` - override firefox devtools port
+
 `GOFIREFOX_PROFILE_LOCATION` - override firefox profile location to download from.
 
 
