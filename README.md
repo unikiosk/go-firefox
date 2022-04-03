@@ -5,6 +5,8 @@
 <br/>
 <p>
 	Firefox manager as a code. Enables to run Firefox and manage firefox from code.
+	</br>
+	!Note: This is very early stage of development. Breaking changes are expected.
 </p>
 <br/>
 </div>
@@ -33,7 +35,7 @@ migration would be smooth.
 		<head><title>Hello</title></head>
 		<body><h1>Hello, world!</h1></body>
 	</html>
-	`), "")
+	`), nil, nil)
 	if err != nil {
 		log.Fatal(err)
 	}

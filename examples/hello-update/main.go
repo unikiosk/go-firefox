@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -8,16 +9,27 @@ import (
 )
 
 func main() {
-	ui, err := gofirefox.New("https://synpse.net", "")
+	ctx := context.Background()
+	ui, err := gofirefox.New("https://synpse.net", nil, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer ui.Close()
+	defer ui.Stop()
+
+	go func() {
+		err := ui.Run(ctx)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}()
 	// Wait until UI window is closed
 
 	time.Sleep(time.Second * 10)
 
-	ui.Load("https://synpse.net/blog/")
+	err = ui.Load("https://synpse.net/blog/")
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	<-ui.Done()
+	<-ctx.Done()
 }

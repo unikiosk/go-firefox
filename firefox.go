@@ -43,8 +43,9 @@ type msg struct {
 }
 
 type firefox struct {
-	config Config
-	args   []string
+	config   Config
+	args     []string
+	userPref []string
 
 	sync.Mutex
 	cmd      *exec.Cmd
@@ -52,7 +53,6 @@ type firefox struct {
 	id       int32
 	target   string
 	session  string
-	window   int
 	pending  map[int]chan result
 	bindings map[string]bindingFunc
 }
@@ -63,23 +63,23 @@ and attempts to use it. If profile does not exists - it will be double start
 (first start created profile, kinda bootstraps it),and second start configures it and uses.
 This is why we recommend some persistency of profile directory. */
 
-// new return new firefix instance
-func new(args ...string) (*firefox, error) {
+// new return new firefix instance. Arguments are passed to firefox executable.
+// userPref is a list of userPreferences (https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig) to be injected into firefox user configuration
+func new(arguments []string, userPref []string) (*firefox, error) {
 	// The first two IDs are used internally during the initialization
 	config, err := getConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	args = append(args, "--profile="+config.ProfileDir)
-	args = append(args, "--remote-debugging-port=0")
-
-	fmt.Println("bootstraping firefox profile")
+	arguments = append(arguments, "--profile="+config.ProfileDir)
+	arguments = append(arguments, "--remote-debugging-port=0")
 
 	c := &firefox{
 		id:       2,
 		config:   *config,
-		args:     args,
+		args:     arguments,
+		userPref: userPref,
 		pending:  map[int]chan result{},
 		bindings: map[string]bindingFunc{},
 	}
@@ -88,12 +88,11 @@ func new(args ...string) (*firefox, error) {
 }
 
 func (c *firefox) run(ctx context.Context) error {
-
-	err := bootstrapFirefoxProfile(context.TODO(), &c.config)
+	defer c.stop()
+	err := c.bootstrapFirefoxProfile(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Println("bootstraping firefox profile done")
 
 	// Start chrome process
 	c.cmd = exec.CommandContext(ctx, FirefoxExecutable(), c.args...)
@@ -111,7 +110,7 @@ func (c *firefox) run(ctx context.Context) error {
 	re := regexp.MustCompile(`^DevTools listening on (ws://.*?)\r?\n$`)
 	m, err := readUntilMatch(pipe, re)
 	if err != nil {
-		c.kill()
+		c.stop()
 		fmt.Printf("readUntilMatch failed %v", err)
 		return err
 	}
@@ -120,7 +119,7 @@ func (c *firefox) run(ctx context.Context) error {
 	// Open a websocket
 	c.ws, err = websocket.Dial(wsURL, "", "http://127.0.0.1")
 	if err != nil {
-		c.kill()
+		c.stop()
 		fmt.Printf("websocket.Dial failed %v", err)
 		return err
 	}
@@ -128,14 +127,14 @@ func (c *firefox) run(ctx context.Context) error {
 	// Find target and initialize session
 	c.target, err = c.findTarget()
 	if err != nil {
-		c.kill()
+		c.stop()
 		fmt.Printf("c.findTarget failed %v", err)
 		return err
 	}
 
 	c.session, err = c.startSession(c.target)
 	if err != nil {
-		c.kill()
+		c.stop()
 		fmt.Printf("startSession failed %v", err)
 		return err
 	}
@@ -151,38 +150,30 @@ func (c *firefox) run(ctx context.Context) error {
 		"Log.enable":           nil,
 	} {
 		if _, err := c.send(method, args); err != nil {
-			c.kill()
+			c.stop()
 			c.cmd.Wait()
 			fmt.Printf("send failed %v", err)
 			return err
 		}
 	}
 
-	if !contains(c.args, "--headless") {
-		win, err := c.getWindowForTarget(c.target)
-		if err != nil {
-			c.kill()
-			fmt.Printf("getWindowForTarget failed %v", err)
+	for {
+		state, err := c.cmd.Process.Wait()
+		switch {
+		case state != nil && state.Exited():
+			return nil
+		case state != nil && strings.EqualFold(state.String(), "signal: killed"):
+			return fmt.Errorf("process killed")
+		case err != nil:
 			return err
 		}
-		c.window = win.WindowID
-	}
-
-	return nil
-}
-
-func (c *firefox) waitForReady(ctx context.Context) error {
-	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil
 		case <-time.After(time.Second):
-			if c.ws != nil {
-				return nil
-			}
+
 		}
 	}
-
 }
 
 func (c *firefox) findTarget() (string, error) {
@@ -212,14 +203,8 @@ func (c *firefox) findTarget() (string, error) {
 	}
 }
 
-func bootstrapFirefoxProfile(ctx context.Context, c *Config) error {
-	profileExtensionsDirPath := filepath.Join(c.ProfileDir, "extensions")
-	err := os.MkdirAll(profileExtensionsDirPath, 0700)
-	if err != nil {
-		return fmt.Errorf("cannot create extensions directory: %s", err)
-	}
-
-	if err = func() error {
+func (c *firefox) bootstrapFirefoxProfile(ctx context.Context) error {
+	if err := func() error {
 		// create HTTP client
 		tr := &http.Transport{}
 		defer tr.CloseIdleConnections()
@@ -229,10 +214,10 @@ func bootstrapFirefoxProfile(ctx context.Context, c *Config) error {
 		}
 
 		// download user.js file
-		userJsPath := filepath.Join(c.ProfileDir, "user.js")
-		if c.ProfileLocationURL != "" {
-			log.Printf("downloading user.js %s --> %s", c.ProfileDir, userJsPath)
-			err = downloadFile(ctx, client, c.ProfileLocationURL, userJsPath)
+		userJsPath := filepath.Join(c.config.ProfileDir, "user.js")
+		if c.config.ProfileLocationURL != "" {
+			log.Printf("downloading user.js %s --> %s", c.config.ProfileDir, userJsPath)
+			err := downloadFile(ctx, client, c.config.ProfileLocationURL, userJsPath)
 			if err != nil {
 				return fmt.Errorf("failed to download user.js: %s", err)
 			}
@@ -240,7 +225,7 @@ func bootstrapFirefoxProfile(ctx context.Context, c *Config) error {
 
 		// append/modify extra preferences to user.js via our script.
 		// function will update inplace.
-		err := configureDevTools(userJsPath)
+		err := configureDevTools(userJsPath, c.userPref)
 		if err != nil {
 			return fmt.Errorf("failed to configure %s - error: %s", userJsPath, err)
 		}
@@ -284,7 +269,7 @@ func (c *firefox) startSession(target string) (string, error) {
 // user_pref("devtools.debugger.remote-enabled", true,);
 
 // configureDevTools will append the devtools config to the profile
-func configureDevTools(prefFile string) error {
+func configureDevTools(prefFile string, userPref []string) error {
 	f, err := os.Open(prefFile)
 	if err != nil {
 		return err
@@ -299,11 +284,16 @@ func configureDevTools(prefFile string) error {
 		lines = append(lines, scanner.Text())
 	}
 
-	// map[matcher-pattern]replacement
+	// map[matcher-pattern]replacement. Default we use.
 	mods := map[string]string{
 		"devtools.chrome.enabled":             "user_pref(\"devtools.chrome.enabled\", true);",
 		"devtools.debugger.prompt-connection": "user_pref(\"devtools.debugger.prompt-connection\", false);",
 		"devtools.debugger.remote-enabled":    "user_pref(\"devtools.debugger.remote-enabled\", true);",
+	}
+
+	inMods := getMatchMods(userPref)
+	for matcher, replacement := range inMods {
+		mods[matcher] = replacement
 	}
 
 	for matcher, replacement := range mods {
@@ -322,43 +312,19 @@ func configureDevTools(prefFile string) error {
 	return os.WriteFile(prefFile, []byte(strings.Join(lines, "\n")), 0644)
 }
 
-// WindowState defines the state of the Chrome window, possible values are
-// "normal", "maximized", "minimized" and "fullscreen".
-type WindowState string
+// getMatchMods returns a map of user prefs to be added to the user.js file with a matcher-pattern to find if one exist
+func getMatchMods(userPref []string) map[string]string {
+	var mods map[string]string
+	for _, pref := range userPref {
+		preff := strings.Replace(pref, "user_pref(", "", 1) // drop the user_pref(
+		preff = strings.Replace(preff, ");", "", 1)         // drop end identifier
+		parts := strings.Split(preff, ",")
+		identifier := strings.TrimSpace(parts[0])
 
-const (
-	// WindowStateNormal defines a normal state of the browser window
-	WindowStateNormal WindowState = "normal"
-	// WindowStateMaximized defines a maximized state of the browser window
-	WindowStateMaximized WindowState = "maximized"
-	// WindowStateMinimized defines a minimized state of the browser window
-	WindowStateMinimized WindowState = "minimized"
-	// WindowStateFullscreen defines a fullscreen state of the browser window
-	WindowStateFullscreen WindowState = "fullscreen"
-)
-
-// Bounds defines settable window properties.
-type Bounds struct {
-	Left        int         `json:"left"`
-	Top         int         `json:"top"`
-	Width       int         `json:"width"`
-	Height      int         `json:"height"`
-	WindowState WindowState `json:"windowState"`
-}
-
-type windowTargetMessage struct {
-	WindowID int    `json:"windowId"`
-	Bounds   Bounds `json:"bounds"`
-}
-
-func (c *firefox) getWindowForTarget(target string) (windowTargetMessage, error) {
-	var m windowTargetMessage
-	msg, err := c.send("Browser.getWindowForTarget", h{"targetId": target})
-	if err != nil {
-		return m, err
+		mods[identifier] = pref
 	}
-	err = json.Unmarshal(msg, &m)
-	return m, err
+	return mods
+
 }
 
 type targetMessageTemplate struct {
@@ -490,7 +456,7 @@ func (c *firefox) readLoop() {
 			}{}
 			json.Unmarshal(m.Params, &params)
 			if params.TargetID == c.target {
-				c.kill()
+				c.stop()
 				return
 			}
 		}
@@ -525,16 +491,20 @@ func (c *firefox) load(url string) error {
 	return err
 }
 
-func (c *firefox) kill() error {
+func (c *firefox) stop() error {
 	if c.ws != nil {
 		if err := c.ws.Close(); err != nil {
 			return err
 		}
 	}
-	// TODO: cancel all pending requests
-	if state := c.cmd.ProcessState; state == nil || !state.Exited() {
-		return c.cmd.Process.Kill()
-	}
+	defer func() {
+		if state := c.cmd.ProcessState; state == nil || !state.Exited() {
+			err := c.cmd.Process.Kill()
+			if err != nil {
+				log.Println(err)
+			}
+		}
+	}()
 	return nil
 }
 
@@ -554,13 +524,4 @@ func readUntilMatch(r io.ReadCloser, re *regexp.Regexp) ([]string, error) {
 			return m, nil
 		}
 	}
-}
-
-func contains(arr []string, x string) bool {
-	for _, n := range arr {
-		if x == n {
-			return true
-		}
-	}
-	return false
 }

@@ -3,13 +3,18 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 
 	gofirefox "github.com/unikiosk/go-firefox"
 )
 
 func main() {
 	ctx := context.Background()
-	ui, err := gofirefox.New("https://synpse.net", nil, nil)
+	path, err := os.Getwd()
+	if err != nil {
+		log.Println(err)
+	}
+	ui, err := gofirefox.New(path+"/examples/dir/index.html", nil, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
