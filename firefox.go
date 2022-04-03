@@ -314,7 +314,7 @@ func configureDevTools(prefFile string, userPref []string) error {
 
 // getMatchMods returns a map of user prefs to be added to the user.js file with a matcher-pattern to find if one exist
 func getMatchMods(userPref []string) map[string]string {
-	var mods map[string]string
+	mods := make(map[string]string, len(userPref))
 	for _, pref := range userPref {
 		preff := strings.Replace(pref, "user_pref(", "", 1) // drop the user_pref(
 		preff = strings.Replace(preff, ");", "", 1)         // drop end identifier
