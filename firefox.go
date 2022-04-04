@@ -72,8 +72,10 @@ func new(arguments []string, userPref []string) (*firefox, error) {
 		return nil, err
 	}
 
-	arguments = append(arguments, "--profile="+config.ProfileDir)
+	arguments = append(arguments, "--profile")
+	arguments = append(arguments, config.ProfileDir)
 	arguments = append(arguments, "--remote-debugging-port=0")
+	arguments = append(arguments, "--no-remote")
 
 	c := &firefox{
 		id:       2,
@@ -96,6 +98,7 @@ func (c *firefox) run(ctx context.Context) error {
 
 	// Start chrome process
 	c.cmd = exec.CommandContext(ctx, FirefoxExecutable(), c.args...)
+	c.cmd.Env = os.Environ()
 	pipe, err := c.cmd.StderrPipe()
 	if err != nil {
 		fmt.Printf("exec.v failed %v", err)

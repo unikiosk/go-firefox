@@ -40,8 +40,6 @@ func New(url string, customArgs, userPreferences []string) (UI, error) {
 		url = "data:text/html,<html>Hello from Unikiosk!</html>"
 	}
 
-	args := customArgs
-
 	// split for parsing
 	urlParts := strings.Split(url, "/")
 	postfix := urlParts[len(urlParts)-1]
@@ -54,10 +52,9 @@ func New(url string, customArgs, userPreferences []string) (UI, error) {
 		url = "file://" + url
 	}
 
+	args := customArgs
 	args = append(args, fmt.Sprintf("--new-window=%s", url))
 	args = append(args, "--kiosk")
-
-	args = append(args, customArgs...)
 
 	firefox, err := new(args, userPreferences)
 	if err != nil {
